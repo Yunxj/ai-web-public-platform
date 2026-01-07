@@ -49,6 +49,27 @@ export const messages = pgTable(
   })
 );
 
+// API Key 配置表
+export const apiKeyConfigs = pgTable(
+  "api_key_configs",
+  {
+    id: varchar("id", { length: 36 })
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    keyName: varchar("key_name", { length: 50 }).notNull().unique(),
+    keyValue: text("key_value").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    keyNameIdx: index("api_key_configs_key_name_idx").on(table.keyName),
+  })
+);
+
 // 使用 createSchemaFactory 配置 date coercion
 const { createInsertSchema: createCoercedInsertSchema } = createSchemaFactory({
   coerce: { date: true },

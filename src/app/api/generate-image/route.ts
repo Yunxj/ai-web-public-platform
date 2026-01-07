@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ImageGenerationClient, Config } from 'coze-coding-dev-sdk';
+import { getImageLLMService } from '@/lib/llm-fallback';
+import { getApiKeysConfig } from '@/config/llm-config';
 
 export const runtime = 'nodejs';
 
@@ -20,17 +21,20 @@ export async function POST(request: NextRequest) {
 
     console.log('生成图片:', prompt, '尺寸:', size, '数量:', count);
 
-    const config = new Config();
-    const client = new ImageGenerationClient(config);
+    // 获取用户配置的API Key
+    const apiKeysConfig = await getApiKeysConfig();
+    
+    // 使用fallback机制获取图片生成服务
+    const imageService = getImageLLMService(apiKeysConfig);
 
-    const response = await client.generate({
+    const response = await imageService.generate({
       prompt,
       size,
       watermark: false,
       responseFormat: 'url',
     });
 
-    const helper = client.getResponseHelper(response);
+    const helper = imageService.getResponseHelper(response);
 
     if (!helper.success) {
       throw new Error(helper.errorMessages.join(', '));

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
 import { AnalyzeContentRequest, AnalyzeContentResponse } from '@/types/api';
 import { ImagePlan } from '@/types/index';
+import { getTextLLMService, type LLMMessage } from '@/lib/llm-fallback';
+import { models, serviceConfig, apiKeys, getActiveService, getTextModel, getApiKeysConfig } from '@/config/llm-config';
 
 export const runtime = 'nodejs';
 
@@ -16,26 +17,62 @@ export const runtime = 'nodejs';
  */
 export async function POST(request: NextRequest) {
   try {
-    const body: AnalyzeContentRequest = await request.json();
-    const { content } = body;
+    let body: AnalyzeContentRequest;
+    try {
+      body = await request.json();
+    } catch (parseError) {
+      console.error('请求体解析失败:', parseError);
+      return NextResponse.json(
+        { success: false, error: '请求体格式错误' },
+        { status: 400 }
+      );
+    }
+
+    const { content, searchData, analysisData, integratedData } = body;
 
     if (!content) {
       return NextResponse.json(
-        { error: '文章内容不能为空' },
+        { success: false, error: '文章内容不能为空' },
         { status: 400 }
       );
     }
 
     console.log('开始分析文章内容，长度:', content.length);
+    console.log('前置步骤数据:', {
+      hasSearchData: !!searchData,
+      hasAnalysisData: !!analysisData,
+      hasIntegratedData: !!integratedData,
+    });
 
-    const config = new Config();
-    const client = new LLMClient(config);
+    // 获取用户配置的API Key
+    const apiKeysConfig = await getApiKeysConfig();
+    
+    // 使用fallback机制获取文本生成服务
+    const textService = getTextLLMService(apiKeysConfig);
 
     // 构建分析提示词
-    const analysisPrompt = `请分析以下公众号文章内容，为文章智能规划配图方案。
+    let analysisPrompt = `请分析以下公众号文章内容，为文章智能规划配图方案。
 
 【文章内容】
-${content}
+${content}`;
+
+    // 如果有前置步骤的数据，添加到提示词中
+    if (searchData && searchData.results && searchData.results.length > 0) {
+      analysisPrompt += `\n\n【搜索资料】\n${searchData.results.map((r, i) => `${i + 1}. ${r.title}: ${r.snippet || ''}`).join('\n')}`;
+      if (searchData.summary) {
+        analysisPrompt += `\n搜索摘要：${searchData.summary}`;
+      }
+    }
+
+    if (analysisData) {
+      analysisPrompt += `\n\n【分析结果】\n${analysisData}`;
+    }
+
+    if (integratedData) {
+      analysisPrompt += `\n\n【整合资料】\n${integratedData}`;
+    }
+
+    analysisPrompt += `
 
 【任务要求】
 1. 分析文章结构，识别所有H2标题（## 标题）
@@ -74,19 +111,21 @@ ${content}
 
    注意：position必须精确匹配文章中的H2标题文本（包含##前缀后的内容）
 
-【示例输出】
-如果文章H2标题是"## 适合的食材"和"## 制作步骤"，输出可能是：
+【重要提示】
+- 你必须严格基于上述提供的文章内容生成配图方案
+- 不要使用下方示例中的具体内容（如"适合的食材"、"制作步骤"等），那些只是格式参考
+- 图片的position必须精确匹配文章中的实际H2标题
+- 图片的prompt必须基于对应章节的实际内容主题生成
+- 如果文章中没有H2标题，请使用"FIRST_PARAGRAPH"作为position
+
+【格式示例（仅作格式参考，不要使用示例中的具体内容）】
 \`\`\`json
 {
   "count": 2,
   "images": [
     {
-      "position": "适合的食材",
-      "prompt": "新鲜蔬菜和水果摆放在木桌上，自然光线，清新风格，高质量摄影，适合健康美食文章"
-    },
-    {
-      "position": "制作步骤",
-      "prompt": "厨房场景，厨师正在切菜，刀工精湛，专业厨房设备，温馨灯光，美食制作过程"
+      "position": "H2标题文本",
+      "prompt": "基于该章节内容生成的图片提示词"
     }
   ]
 }
@@ -95,23 +134,28 @@ ${content}
 请现在分析上面的文章内容，并以JSON格式返回配图方案。`;
 
     try {
-      const messages = [
+      const messages: LLMMessage[] = [
         {
-          role: 'system' as const,
+          role: 'system',
           content: '你是一个专业的文章配图策划师，擅长分析文章内容并规划合适的配图方案。',
         },
         {
-          role: 'user' as const,
+          role: 'user',
           content: analysisPrompt,
         },
       ];
 
-      // 使用DeepSeek模型进行分析（更强大的推理能力）
+      // 使用LLM进行分析
       // 对于图片规划这种需要强逻辑推理的任务，使用较低的temperature确保准确
-      const response = await client.invoke(messages, {
-        model: 'deepseek-r1-250528', // 使用正确的DeepSeek R1模型名称
-        temperature: 0.3, // 降低temperature以确保JSON格式准确
-      });
+      const invokeOptions: any = {
+        temperature: serviceConfig.defaults.temperature.analyze, // 降低temperature以确保JSON格式准确
+      };
+
+      // 根据当前配置的服务选择模型（优先使用DeepSeek）
+      const activeService = getActiveService();
+      invokeOptions.model = getTextModel(activeService.text);
+
+      const response = await textService.invoke(messages, invokeOptions);
 
       // 提取JSON响应
       let jsonContent = response.content;
@@ -128,7 +172,14 @@ ${content}
       }
 
       // 解析JSON
-      const plan = JSON.parse(jsonContent) as ImagePlan;
+      let plan: ImagePlan;
+      try {
+        plan = JSON.parse(jsonContent) as ImagePlan;
+      } catch (parseError) {
+        console.error('JSON解析失败:', parseError);
+        console.error('原始响应内容:', jsonContent.substring(0, 500));
+        throw new Error(`JSON解析失败: ${parseError instanceof Error ? parseError.message : '未知错误'}`);
+      }
 
       // 验证和修正 - 确保至少有一张图片
       if (!plan.count || plan.count < 1) {

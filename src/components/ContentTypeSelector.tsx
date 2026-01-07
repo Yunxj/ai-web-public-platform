@@ -5,12 +5,7 @@ interface ContentTypeSelectorProps {
 
 const contentTypes = [
   { id: 'article', label: '公众号文章', icon: '📝' },
-  { id: 'poster', label: '海报/传单', icon: '🎨' },
-  { id: 'word', label: 'Word文档', icon: '📄' },
   { id: 'xiaohongshu', label: '小红书', icon: '📱' },
-  { id: 'ecommerce', label: '电商文案', icon: '🛒' },
-  { id: 'longimage', label: '长图/长文', icon: '🖼️' },
-  { id: 'decoration', label: '户型装修', icon: '🏠' },
 ];
 
 export default function ContentTypeSelector({ value, onChange }: ContentTypeSelectorProps) {

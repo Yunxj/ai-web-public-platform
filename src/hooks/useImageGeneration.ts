@@ -12,7 +12,13 @@ export function useImageGeneration() {
 
   const generateImages = useCallback(async (
     content: string,
-    onStepUpdate: (stepId: string, status: 'running' | 'completed' | 'error', result?: string) => void
+    onStepUpdate: (stepId: string, status: 'running' | 'completed' | 'error', result?: string) => void,
+    searchData?: {
+      results: Array<{ title: string; url: string; snippet?: string }>;
+      summary?: string;
+    },
+    analysisData?: string,
+    integratedData?: string
   ): Promise<void> => {
     onStepUpdate('image', 'running');
     
@@ -30,21 +36,54 @@ export function useImageGeneration() {
           },
           body: JSON.stringify({
             content,
+            searchData,
+            analysisData,
+            integratedData,
           }),
         },
         60000 // 内容分析超时设置为1分钟
       );
 
+      let analyzeData: any = null;
+      
       if (!analyzeResponse.ok) {
-        throw new Error('内容分析失败');
+        // 尝试解析错误响应以获取详细错误信息
+        let errorMessage = `HTTP ${analyzeResponse.status}: ${analyzeResponse.statusText || '未知错误'}`;
+        try {
+          // 先尝试读取响应文本
+          const responseText = await analyzeResponse.text();
+          
+          if (responseText) {
+            try {
+              const errorData = JSON.parse(responseText);
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } catch (parseError) {
+              // 如果不是JSON，直接使用文本内容
+              errorMessage = responseText.length > 200 
+                ? `${responseText.substring(0, 200)}...` 
+                : responseText;
+            }
+          }
+        } catch (e) {
+          // 忽略读取错误
+        }
+        
+        console.warn('内容分析API错误，使用fallback方案:', JSON.stringify({
+          status: analyzeResponse.status,
+          statusText: analyzeResponse.statusText,
+          error: errorMessage,
+        }, null, 2));
+        
+        // 内容分析失败不影响主流程，使用fallback方案继续
+        analyzeData = { success: false };
+      } else {
+        analyzeData = await analyzeResponse.json();
+        console.log('内容分析结果:', JSON.stringify(analyzeData, null, 2));
       }
-
-      const analyzeData = await analyzeResponse.json();
-      console.log('内容分析结果:', analyzeData);
 
       let plan: { count: number; images: Array<{ prompt: string; position: string }> };
 
-      if (!analyzeData.success || !analyzeData.plan) {
+      if (!analyzeData || !analyzeData.success || !analyzeData.plan) {
         console.warn('分析失败，使用fallback方案');
         plan = {
           count: 1,
@@ -100,26 +139,57 @@ export function useImageGeneration() {
       );
 
       if (!batchResponse.ok) {
-        const errorData = await batchResponse.json().catch(() => ({}));
-        console.error('批量生成图片失败:', {
+        let errorMessage = `HTTP ${batchResponse.status}: ${batchResponse.statusText || '未知错误'}`;
+        try {
+          const errorData = await batchResponse.json();
+          if (errorData.error) {
+            errorMessage = typeof errorData.error === 'string' 
+              ? errorData.error 
+              : JSON.stringify(errorData.error, null, 2);
+          }
+        } catch (parseError) {
+          // 忽略解析错误
+        }
+        
+        console.warn('批量生成图片API错误，跳过配图:', JSON.stringify({
           status: batchResponse.status,
           statusText: batchResponse.statusText,
-          errorData,
-        });
-        throw new Error(`批量生成图片失败: HTTP ${batchResponse.status} - ${errorData.error || batchResponse.statusText}`);
+          error: errorMessage,
+        }, null, 2));
+        
+        // 图片生成失败不影响主流程，只记录警告
+        onStepUpdate('image', 'completed', '跳过配图（图片生成服务不可用）');
+        return;
       }
 
       const batchData = await batchResponse.json();
-      console.log('批量生成结果:', {
+      console.log('批量生成结果:', JSON.stringify({
         success: batchData.success,
         totalRequested: batchData.totalRequested,
         successCount: batchData.successCount,
         failedCount: batchData.failedCount,
         imagesCount: batchData.images?.length,
-      });
+        images: batchData.images?.map((img: { position: string; url: string }) => ({
+          position: img.position,
+          url: img.url ? `${img.url.substring(0, 50)}...` : 'N/A',
+        })),
+      }, null, 2));
 
-      if (!batchData.success || batchData.images.length === 0) {
-        throw new Error('未能生成图片，可能所有图片都生成失败');
+      // 检查是否有成功生成的图片
+      if (!batchData.success || !batchData.images || batchData.images.length === 0) {
+        const errorDetails = {
+          success: batchData.success,
+          totalRequested: batchData.totalRequested,
+          successCount: batchData.successCount,
+          failedCount: batchData.failedCount,
+          imagesCount: batchData.images?.length || 0,
+        };
+        
+        console.warn('图片生成失败，跳过配图:', JSON.stringify(errorDetails, null, 2));
+        
+        // 图片生成失败不影响主流程，只记录警告
+        onStepUpdate('image', 'completed', '跳过配图（图片生成失败）');
+        return;
       }
 
       // 5.3 保存生成的图片和位置信息
@@ -129,9 +199,19 @@ export function useImageGeneration() {
 
       onStepUpdate('image', 'completed', `智能生成 ${batchData.images.length} 张配图`);
     } catch (error) {
-      console.error('智能配图失败:', error);
-      onStepUpdate('image', 'error');
-      throw error;
+      // 图片生成过程中的任何错误都不应该中断主流程
+      const errorDetails = error instanceof Error
+        ? {
+            name: error.name,
+            message: error.message,
+            stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+          }
+        : { error: String(error) };
+      
+      console.warn('智能配图过程出错，跳过配图:', JSON.stringify(errorDetails, null, 2));
+      
+      // 不抛出错误，只更新步骤状态为完成（跳过配图）
+      onStepUpdate('image', 'completed', '跳过配图（配图过程出错）');
     }
   }, []);
 

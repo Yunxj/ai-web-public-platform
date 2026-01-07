@@ -1,5 +1,5 @@
 import { eq, desc, and } from "drizzle-orm";
-import { getDb } from "coze-coding-dev-sdk";
+import { getDb, isDbAvailable } from "./db";
 import {
   conversations,
   messages,
@@ -21,6 +21,19 @@ export class ConversationManager {
    */
   async createConversation(data: InsertConversation): Promise<Conversation> {
     const db = await getDb();
+    if (!db) {
+      // 无数据库模式：返回临时对话对象
+      const validated = insertConversationSchema.parse(data);
+      return {
+        id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        title: validated.title || '新对话',
+        contentType: validated.contentType || 'article',
+        metadata: validated.metadata || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    }
+    
     const validated = insertConversationSchema.parse(data);
     const [conversation] = await db
       .insert(conversations)
@@ -39,6 +52,11 @@ export class ConversationManager {
   } = {}): Promise<Conversation[]> {
     const { skip = 0, limit = 50, contentType } = options;
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回空数组
+      return [];
+    }
 
     const conditions = [];
     if (contentType) {
@@ -71,6 +89,11 @@ export class ConversationManager {
     messages: Message[];
   }> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回空数据
+      return { conversation: null, messages: [] };
+    }
 
     const [conversation] = await db
       .select()
@@ -95,6 +118,12 @@ export class ConversationManager {
    */
   async getConversationById(id: string): Promise<Conversation | null> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回null
+      return null;
+    }
+    
     const [conversation] = await db
       .select()
       .from(conversations)
@@ -110,6 +139,12 @@ export class ConversationManager {
     data: UpdateConversation
   ): Promise<Conversation | null> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回null（无法更新）
+      return null;
+    }
+    
     const validated = updateConversationSchema.parse(data);
     const [conversation] = await db
       .update(conversations)
@@ -124,6 +159,12 @@ export class ConversationManager {
    */
   async deleteConversation(id: string): Promise<boolean> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回false（无法删除）
+      return false;
+    }
+    
     const result = await db.delete(conversations).where(eq(conversations.id, id));
     return (result.rowCount ?? 0) > 0;
   }
@@ -133,6 +174,20 @@ export class ConversationManager {
    */
   async addMessage(data: InsertMessage): Promise<Message> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回临时消息对象
+      const validated = insertMessageSchema.parse(data);
+      return {
+        id: `temp_msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        conversationId: validated.conversationId,
+        role: validated.role,
+        content: validated.content,
+        metadata: validated.metadata || null,
+        createdAt: new Date(),
+      };
+    }
+    
     const validated = insertMessageSchema.parse(data);
     const [message] = await db.insert(messages).values(validated).returning();
 
@@ -150,6 +205,12 @@ export class ConversationManager {
    */
   async getMessagesByConversationId(conversationId: string): Promise<Message[]> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回空数组
+      return [];
+    }
+    
     return db
       .select()
       .from(messages)
@@ -162,6 +223,12 @@ export class ConversationManager {
    */
   async deleteMessage(id: string): Promise<boolean> {
     const db = await getDb();
+    
+    if (!db) {
+      // 无数据库模式：返回false（无法删除）
+      return false;
+    }
+    
     const result = await db.delete(messages).where(eq(messages.id, id));
     return (result.rowCount ?? 0) > 0;
   }

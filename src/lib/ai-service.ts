@@ -1,7 +1,7 @@
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
-import { SearchClient } from 'coze-coding-dev-sdk';
-import { ImageGenerationClient } from 'coze-coding-dev-sdk';
 import { getModelConfigForPrompt } from './model-selector';
+import { getTextLLMService, getImageLLMService, type LLMMessage } from './llm-fallback';
+import { apiKeys } from '@/config/llm-config';
+import { isAccountError, isRetryableError, getFriendlyErrorMessage } from './error-handler';
 
 interface GenerateArticleParams {
   prompt: string;
@@ -9,6 +9,13 @@ interface GenerateArticleParams {
   context?: Array<{ role: 'user' | 'assistant'; content: string }>;
   enableSearch?: boolean;
   enableImage?: boolean;
+  integratedData?: string; // 整合后的资料
+  apiKeysConfig?: { // 可选的API Key配置
+    deepseek?: string;
+    qwen?: string;
+    doubao?: string;
+    ark?: string;
+  };
 }
 
 // 内容类型提示词模板
@@ -56,10 +63,11 @@ const contentTypePrompts: Record<string, string> = {
    • 列表项使用 • 符号，灰色正文
 
 3. **如何实施：**（橙色加粗）
-   1. ■ 技术搭建：使用 Stable Diffusion + LoRA 微调...
-   2. ■ 产品设计：简化用户操作流程...
-   - 数字列表（1.），首行缩进，灰色正文
-   - 每个列表项前添加 ■ 符号（普通文本，不需要加粗）
+   ■ 技术搭建：使用 Stable Diffusion + LoRA 微调...
+   ■ 产品设计：简化用户操作流程...
+   - 使用 ■ 符号作为列表项标记（普通文本，不需要加粗）
+   - 每个列表项首行缩进，灰色正文
+   - 不使用数字列表标记，避免与■符号重复
 
 4. **真实案例：**（橙色加粗）
    > ■ 宁波"飞鱼外贸"
@@ -104,8 +112,6 @@ const contentTypePrompts: Record<string, string> = {
 
 ## 01 | AI"复活"师：用3分钟视频让逝者"开口"
 
-![配图](图片链接)
-
 **核心逻辑：** 把生成式对抗网络（GAN）+**语音克隆（ElevenLabs）**打包成SaaS服务，让家属提供逝者的照片和音频样本，3分钟内生成能"开口说话"的数字分身，费用仅为传统视频制作的1/10。
 
 **为什么重要：**
@@ -114,9 +120,9 @@ const contentTypePrompts: Record<string, string> = {
 • 情感价值高，用户付费意愿强，客单价可达800-1500元
 
 **如何实施：**
-1. ■ 技术搭建：使用 Stable Diffusion + LoRA 微调，训练个人面部模型
-2. ■ 产品设计：简化用户操作流程，只需上传3张照片+10秒音频
-3. ■ 定价策略：基础版299元，专业版899元（含1对1客服）
+■ 技术搭建：使用 Stable Diffusion + LoRA 微调，训练个人面部模型
+■ 产品设计：简化用户操作流程，只需上传3张照片+10秒音频
+■ 定价策略：基础版299元，专业版899元（含1对1客服）
 
 **真实案例：**
 > ■ 深圳"忆界Studio"
@@ -155,8 +161,8 @@ const contentTypePrompts: Record<string, string> = {
 - ✅ 每个案例是否包含5个固定模块（核心逻辑、为什么重要、如何实施、真实案例、入门门槛）
 - ✅ 小标题是否使用橙色加粗 **标题名：**，字号15px
 - ✅ 关键词（技术名词、工具名）是否用 **橙色加粗**
-- ✅ 列表项前是否添加 ■ 符号（普通文本，不需要加粗）
-- ✅ 数字列表（1.）是否首行缩进
+- ✅ "如何实施"部分是否使用 ■ 符号作为列表项标记（普通文本，不需要加粗，不使用数字列表标记）
+- ✅ 列表项是否首行缩进
 - ✅ 真实案例是否使用 > 引用块，米白背景 #fbf9f9
 - ✅ 真实案例是否使用分层排版（主体+核心数据两层）
 - ✅ 案例数据是否用 ｜ 符号分隔，行尾加分号 ；
@@ -462,49 +468,114 @@ const contentTypePrompts: Record<string, string> = {
 };
 
 /**
- * 搜索相关资料
+ * 使用LLM生成搜索相关内容
+ */
+export async function generateSearchContentWithLLM(query: string, count: number = 5): Promise<{
+  web_items?: Array<{ title: string; url: string; snippet: string }>;
+  image_items?: Array<{ title: string; url: string; snippet: string }>;
+  summary?: string;
+}> {
+  try {
+    const textService = getTextLLMService();
+    
+    const searchPrompt = `请根据以下查询主题，生成${count}条相关的知识内容摘要。每条内容应包含：
+1. 标题（简洁明了）
+2. 内容摘要（100-200字）
+3. 相关要点（3-5个要点）
+
+查询主题：${query}
+
+请以JSON格式返回，格式如下：
+{
+  "items": [
+    {
+      "title": "标题",
+      "snippet": "内容摘要和要点",
+      "url": "知识来源标识"
+    }
+  ],
+  "summary": "整体摘要（200-300字）"
+}`;
+
+    const messages: LLMMessage[] = [
+      {
+        role: 'system',
+        content: '你是一个专业的知识内容生成助手，能够根据查询主题生成结构化的知识内容摘要。',
+      },
+      {
+        role: 'user',
+        content: searchPrompt,
+      },
+    ];
+
+    const response = await textService.invoke(messages, {
+      temperature: 0.7,
+    });
+
+    // 尝试解析JSON响应
+    let parsedData: any;
+    try {
+      // 提取JSON部分（可能包含markdown代码块）
+      const jsonMatch = response.content.match(/```json\s*([\s\S]*?)\s*```/) || 
+                       response.content.match(/\{[\s\S]*\}/);
+      const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : response.content;
+      parsedData = JSON.parse(jsonStr);
+    } catch (parseError) {
+      // 如果解析失败，手动构造结果
+      console.warn('LLM返回格式异常，使用fallback格式:', parseError);
+      parsedData = {
+        items: [{
+          title: query,
+          snippet: response.content.substring(0, 200),
+          url: 'llm-generated',
+        }],
+        summary: response.content.substring(0, 300),
+      };
+    }
+
+    // 格式化为搜索结果格式
+    const items = parsedData.items || [];
+    const formattedItems = items.slice(0, count).map((item: any, index: number) => ({
+      title: item.title || `相关内容 ${index + 1}`,
+      url: item.url || `llm-generated-${index}`,
+      snippet: item.snippet || item.content || '',
+    }));
+
+    return {
+      web_items: formattedItems,
+      summary: parsedData.summary || response.content.substring(0, 300),
+    };
+  } catch (error) {
+    console.error('LLM搜索内容生成失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 搜索相关资料（已废弃，使用generateSearchContentWithLLM替代）
  */
 export async function searchRelatedContent(query: string, count: number = 5) {
-  try {
-    const config = new Config();
-    const client = new SearchClient(config);
-    const response = await client.webSearch(query, count, true);
-    return response;
-  } catch (error) {
-    console.error('搜索错误:', error);
-    throw error;
-  }
+  return generateSearchContentWithLLM(query, count);
 }
 
 /**
- * 搜索相关图片
+ * 搜索相关图片（已废弃，使用generateSearchContentWithLLM替代）
  */
 export async function searchRelatedImages(query: string, count: number = 5) {
-  try {
-    const config = new Config();
-    const client = new SearchClient(config);
-    const response = await client.imageSearch(query, count);
-    return response;
-  } catch (error) {
-    console.error('搜索图片错误:', error);
-    throw error;
-  }
+  return generateSearchContentWithLLM(query, count);
 }
 
 /**
- * 生成配图
+ * 生成配图（使用豆包）
  */
 export async function generateImage(prompt: string, size: string = '2K') {
   try {
-    const config = new Config();
-    const client = new ImageGenerationClient(config);
+    // 使用豆包图片生成服务
+    const imageService = getImageLLMService();
 
-    // 尝试设置模型（如果SDK支持）
-    // 注意：根据SDK 0.5.2版本，ImageGenerationClient使用默认模型 doubao-seedream-4-5-251128
-    // 这已经是用户想要的Doubao-Seedream-4.5版本
-    console.log('图片生成模型:', (client as any).model || '默认模型');
+    console.log('使用图片生成服务: 豆包');
 
-    const response = await client.generate({
+    const response = await imageService.generate({
       prompt,
       size,
       watermark: false,
@@ -518,7 +589,7 @@ export async function generateImage(prompt: string, size: string = '2K') {
 }
 
 /**
- * 生成文章内容（流式）- 使用智能模型选择
+ * 生成文章内容（流式）- 使用智能模型选择，支持多模型重试
  */
 export async function generateArticle({
   prompt,
@@ -526,6 +597,8 @@ export async function generateArticle({
   context = [],
   enableSearch = true,
   enableImage = true,
+  integratedData,
+  apiKeysConfig,
 }: GenerateArticleParams): Promise<string> {
   // 智能选择模型和参数
   const { recognition, config: modelConfig } = getModelConfigForPrompt(prompt, contentType);
@@ -533,14 +606,39 @@ export async function generateArticle({
   console.log(`[智能模型选择] 内容类型: ${recognition.type}, 置信度: ${recognition.confidence}, 原因: ${recognition.reason}`);
   console.log(`[模型配置] 模型: ${modelConfig.model}, Temperature: ${modelConfig.temperature}`);
 
-  const config = new Config();
-  const client = new LLMClient(config);
+  const baseTemplate = contentTypePrompts[contentType] || contentTypePrompts.article;
+  
+  // 如果有整合后的资料，优先使用这些资料，而不是模板中的示例
+  let systemPrompt: string;
+  if (integratedData) {
+    // 提取格式规范部分（从"## 整体框架"开始的所有内容）
+    const formatSection = baseTemplate.includes('## 整体框架') 
+      ? '## 整体框架与布局规范' + baseTemplate.split('## 整体框架')[1] 
+      : baseTemplate;
+    
+    // 在系统提示开头强调必须使用 integratedData
+    systemPrompt = `你是一个专业的公众号文章写作助手。请根据用户需求和提供的资料生成一篇高质量的公众号文章。
 
-  let systemPrompt = contentTypePrompts[contentType] || contentTypePrompts.article;
+【重要提示 - 请严格遵守】
+1. 你必须严格基于下方提供的「整合后的资料」生成文章内容
+2. 不要使用模板中的示例内容（如"AI创业"、"AI复活师"等示例），那些只是格式参考
+3. 文章的主题、观点、案例、数据都必须来自「整合后的资料」
+4. 保持格式规范，但内容必须完全基于提供的资料
+5. 如果资料中没有的内容，不要自行编造
 
-  // 如果启用了搜索，在系统提示中添加说明
-  if (enableSearch) {
-    systemPrompt += '\n\n【搜索能力】你已经联网搜索并整合了相关资料，请在生成内容时充分利用这些信息。';
+【整合后的资料】
+${integratedData}
+
+【格式要求】
+请参考以下格式规范（仅作为格式参考，内容必须基于上述资料）：
+
+${formatSection}`;
+  } else {
+    systemPrompt = baseTemplate;
+    // 如果启用了搜索，在系统提示中添加说明
+    if (enableSearch) {
+      systemPrompt += '\n\n【搜索能力】你已经联网搜索并整合了相关资料，请在生成内容时充分利用这些信息。';
+    }
   }
 
   if (enableImage) {
@@ -555,50 +653,82 @@ export async function generateArticle({
   }
 
   // 构建消息列表
-  const messages = [
+  const messages: LLMMessage[] = [
     {
-      role: 'system' as const,
+      role: 'system',
       content: systemPrompt,
     },
     ...context.map(msg => ({
-      role: msg.role as 'user' | 'assistant',
+      role: msg.role as 'system' | 'user' | 'assistant',
       content: msg.content,
     })),
     {
-      role: 'user' as const,
-      content: prompt,
+      role: 'user',
+      content: integratedData 
+        ? `${prompt}\n\n【重要】请基于上述系统提示中提供的「整合后的资料」生成文章，确保文章内容与资料高度相关，不要偏离主题。` 
+        : prompt,
     },
   ];
 
-  try {
-    console.log('开始调用LLM流式接口，消息数量:', messages.length);
-    console.log('使用的模型:', modelConfig.model);
-    console.log('消息内容摘要:', messages.map(m => ({ role: m.role, contentLength: typeof m.content === 'string' ? m.content.length : 'object' })));
+  // 多模型重试机制
+  const maxRetries = 2;
+  let lastError: Error | null = null;
 
-    // 先尝试用 invoke 方法，看看能否成功
-    console.log('尝试使用 invoke 方法...');
-    const config = new Config();
-    const client = new LLMClient(config);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // 获取文本生成服务（优先使用DeepSeek）
+      const textService = getTextLLMService(apiKeysConfig);
 
-    const invokeConfig: any = {
-      temperature: modelConfig.temperature,
-    };
+      console.log(`[尝试 ${attempt + 1}/${maxRetries + 1}] 开始调用LLM接口，消息数量:`, messages.length);
+      console.log('使用的服务: DeepSeek（或fallback服务）');
+      console.log('消息内容摘要:', messages.map(m => ({ role: m.role, contentLength: typeof m.content === 'string' ? m.content.length : 'object' })));
 
-    // 只有当模型名称存在时才传递 model 参数
-    if (modelConfig.model) {
-      invokeConfig.model = modelConfig.model;
+      const invokeOptions: any = {
+        temperature: modelConfig.temperature,
+      };
+
+      // DeepSeek使用模型选择逻辑
+      if (modelConfig.model) {
+        invokeOptions.model = modelConfig.model;
+      }
+
+      const response = await textService.invoke(messages, invokeOptions);
+
+      if (response.content && response.content.trim().length > 0) {
+        console.log(`[成功] LLM调用成功，内容长度:`, response.content.length);
+        return response.content;
+      } else {
+        throw new Error('生成的内容为空');
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.error(`[尝试 ${attempt + 1}/${maxRetries + 1}] AI生成错误:`, {
+        error: lastError.message,
+        attempt: attempt + 1,
+      });
+
+      // 如果是账户错误，不应该重试，直接抛出友好错误
+      if (isAccountError(error)) {
+        throw new Error(getFriendlyErrorMessage(error));
+      }
+
+      // 如果是不可重试的错误，直接抛出
+      if (!isRetryableError(error)) {
+        throw lastError;
+      }
+
+      // 如果不是最后一次尝试，等待后重试
+      if (attempt < maxRetries) {
+        const waitTime = (attempt + 1) * 1000; // 递增等待时间
+        console.log(`等待 ${waitTime}ms 后重试...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
     }
-
-    const testResponse = await client.invoke(messages, invokeConfig);
-
-    console.log('invoke 成功，内容长度:', testResponse.content.length);
-
-    // 如果 invoke 成功，直接返回
-    return testResponse.content;
-  } catch (error) {
-    console.error('AI生成错误:', error);
-    throw new Error('生成失败，请稍后重试');
   }
+
+  // 所有重试都失败，抛出友好错误信息
+  console.error('所有重试都失败，无法生成内容');
+  throw new Error(getFriendlyErrorMessage(lastError) || `生成失败（已重试${maxRetries + 1}次）: ${lastError?.message || '未知错误'}`);
 }
 
 /**
@@ -608,36 +738,46 @@ export async function generateArticleSync({
   prompt,
   contentType,
   context = [],
+  apiKeysConfig,
 }: GenerateArticleParams): Promise<string> {
-  const config = new Config();
-  const client = new LLMClient(config);
+  // 使用通义千问文本生成服务
+  const textService = getTextLLMService(apiKeysConfig);
+
+  // 智能选择模型和参数
+  const { recognition, config: modelConfig } = getModelConfigForPrompt(prompt, contentType);
 
   const systemPrompt = contentTypePrompts[contentType] || contentTypePrompts.article;
 
-  const messages = [
+  const messages: LLMMessage[] = [
     {
-      role: 'system' as const,
+      role: 'system',
       content: systemPrompt,
     },
     ...context.map(msg => ({
-      role: msg.role as 'user' | 'assistant',
+      role: msg.role as 'system' | 'user' | 'assistant',
       content: msg.content,
     })),
     {
-      role: 'user' as const,
+      role: 'user',
       content: prompt,
     },
   ];
 
   try {
-    const response = await client.invoke(messages, {
-      model: 'doubao-seed-1-6-251015',
-      temperature: 0.8,
-    });
+    const invokeOptions: any = {
+      temperature: modelConfig.temperature,
+    };
+
+    // 使用通义千问模型
+    if (modelConfig.model) {
+      invokeOptions.model = modelConfig.model;
+    }
+
+    const response = await textService.invoke(messages, invokeOptions);
 
     return response.content;
   } catch (error) {
     console.error('AI生成错误:', error);
-    throw new Error('生成失败，请稍后重试');
+    throw new Error(`生成失败: ${error instanceof Error ? error.message : '未知错误'}`);
   }
 }

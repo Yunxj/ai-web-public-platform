@@ -64,6 +64,7 @@ export interface GenerateArticleRequest {
   message: string;
   contentType: string;
   context?: Message[];
+  integratedData?: string; // 整合后的资料
 }
 
 export interface StreamChunk {
@@ -71,10 +72,55 @@ export interface StreamChunk {
   error?: string;
 }
 
+// ========== 资料分析相关 API ==========
+
+export interface AnalyzeSearchResultsRequest {
+  query: string;
+  searchResults: SearchResult[];
+  searchSummary?: string;
+}
+
+export interface AnalyzeSearchResultsResponse {
+  success: boolean;
+  analysis?: string; // 分析结果（关键信息、价值点、相关性等）
+  error?: string;
+}
+
+// ========== 资料整合相关 API ==========
+
+export interface IntegrateAnalysisRequest {
+  query: string;
+  analysisData: string; // 分析结果
+}
+
+export interface IntegrateAnalysisResponse {
+  success: boolean;
+  integratedData?: string; // 整合后的结构化资料
+  error?: string;
+}
+
+// ========== 专家排版相关 API ==========
+
+export interface ExpertLayoutRequest {
+  content: string; // 生成的文章内容
+}
+
+export interface ExpertLayoutResponse {
+  success: boolean;
+  formattedContent?: string; // 排版后的文章内容
+  error?: string;
+}
+
 // ========== 图片生成相关 API ==========
 
 export interface AnalyzeContentRequest {
   content: string;
+  searchData?: {
+    results: SearchResult[];
+    summary?: string;
+  };
+  analysisData?: string; // 分析结果
+  integratedData?: string; // 整合后的资料
 }
 
 export interface AnalyzeContentResponse {

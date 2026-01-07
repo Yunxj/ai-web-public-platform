@@ -1,4 +1,4 @@
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
+import { getTextModel, serviceConfig, getActiveService } from '@/config/llm-config';
 
 /**
  * 内容类型枚举
@@ -32,7 +32,6 @@ interface RecognitionResult {
  */
 export class ModelSelector {
   private static instance: ModelSelector;
-  private config = new Config();
 
   private constructor() {}
 
@@ -144,49 +143,42 @@ export class ModelSelector {
    * 获取模型配置
    */
   public getModelConfig(contentType: ContentType): ModelConfig {
-    // 使用Kimi-K2模型作为统一文本生成模型（完整模型名称）
-    const kimiModel = 'kimi-k2-250905';
+    // 根据当前配置的服务动态选择模型（优先使用DeepSeek）
+    const activeService = getActiveService();
+    const textModel = getTextModel(activeService.text);
 
     switch (contentType) {
       case ContentType.TECHNICAL:
-        // 技术型内容：使用Kimi-K2，temperature较低以确保准确性
+        // 技术型内容：temperature较低以确保准确性
         return {
-          model: kimiModel,
-          temperature: 0.4,
-          maxTokens: 2000,
+          model: textModel,
+          temperature: serviceConfig.defaults.temperature.technical,
+          maxTokens: serviceConfig.defaults.maxTokens,
         };
 
       case ContentType.CREATIVE:
-        // 创意型内容：使用Kimi-K2，temperature较高以增加多样性
+        // 创意型内容：temperature较高以增加多样性
         return {
-          model: kimiModel,
-          temperature: 0.7,
-          maxTokens: 2000,
+          model: textModel,
+          temperature: serviceConfig.defaults.temperature.creative,
+          maxTokens: serviceConfig.defaults.maxTokens,
         };
 
       case ContentType.GENERAL:
-        // 通用型内容：使用Kimi-K2，平衡准确性和创意
+        // 通用型内容：平衡准确性和创意
         return {
-          model: kimiModel,
-          temperature: 0.6,
-          maxTokens: 2000,
+          model: textModel,
+          temperature: serviceConfig.defaults.temperature.general,
+          maxTokens: serviceConfig.defaults.maxTokens,
         };
 
       default:
         return {
-          model: kimiModel,
-          temperature: 0.6,
-          maxTokens: 2000,
+          model: qwenModel,
+          temperature: serviceConfig.defaults.temperature.general,
+          maxTokens: serviceConfig.defaults.maxTokens,
         };
     }
-  }
-
-  /**
-   * 创建LLM客户端
-   */
-  public createClient(contentType: ContentType): LLMClient {
-    const config = new Config();
-    return new LLMClient(config);
   }
 }
 

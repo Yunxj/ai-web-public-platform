@@ -37,7 +37,7 @@ export default function MessageList({ messages, isGenerating, steps = [], showSt
             开始创作您的文章
           </h2>
           <p className="max-w-md text-gray-600 dark:text-gray-400">
-            输入您的文章主题或需求，AI 将为您生成高质量的内容。支持公众号文章、海报、Word 等多种格式。
+            输入您的文章主题或需求，AI 将为您生成高质量的内容。支持公众号文章、小红书等格式。
           </p>
         </div>
       )}

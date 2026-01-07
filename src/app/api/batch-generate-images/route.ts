@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ImageGenerationClient, Config } from 'coze-coding-dev-sdk';
+import { getImageLLMService } from '@/lib/llm-fallback';
+import { getApiKeysConfig } from '@/config/llm-config';
 import { BatchGenerateImagesRequest, BatchGenerateImagesResponse, ImageRequest } from '@/types/api';
 
 export const runtime = 'nodejs';
@@ -31,12 +32,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`开始批量生成 ${images.length} 张图片`);
 
-    const config = new Config();
-    const client = new ImageGenerationClient(config);
-
-    // 显示使用的图片生成模型
-    const clientModel = 'model' in client ? (client as { model?: string }).model : undefined;
-    console.log('图片生成模型:', clientModel || '默认模型');
+    // 获取用户配置的API Key
+    const apiKeysConfig = await getApiKeysConfig();
+    
+    // 使用豆包图片生成服务
+    const imageService = getImageLLMService(apiKeysConfig);
+    console.log('图片生成服务: 豆包');
 
     // 并发生成所有图片，使用 Promise.allSettled 确保所有请求都完成
     const imagePromises = images.map(async (imgRequest, index) => {
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
           setTimeout(() => reject(new Error('图片生成超时')), 60000)
         );
 
-        const generationPromise = client.generate({
+        const generationPromise = imageService.generate({
           prompt: imgRequest.prompt,
           size: imageSize,
           watermark: false, // 确保无水印
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
         // 使用 Promise.race 实现超时控制
         const response = await Promise.race([generationPromise, timeoutPromise]);
 
-        const helper = client.getResponseHelper(response);
+        const helper = imageService.getResponseHelper(response);
 
         if (!helper.success || helper.imageUrls.length === 0) {
           const errorMsg = helper.errorMessages.length > 0

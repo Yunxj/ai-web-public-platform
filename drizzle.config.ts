@@ -5,7 +5,6 @@ export default defineConfig({
   out: './src/storage/database/migrations',
   dialect: 'postgresql',
   dbCredentials: {
-    // 注意：实际使用时应该从环境变量读取
-    // url: process.env.DATABASE_URL || '',
+    url: process.env.DATABASE_URL || '',
   },
 });
