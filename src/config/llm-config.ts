@@ -82,13 +82,15 @@ export const serviceConfig = {
   deepseek: {
     baseUrl: 'https://api.deepseek.com',
     defaultTemperature: 0.7,
-    defaultMaxTokens: 2000,
+    // defaultMaxTokens 已移除，不再设置默认限制，让模型根据上下文自动决定
+    articleMaxTokens: 6000, // 文章生成专用，支持1500-2500字的完整文章
   },
   /** 通义千问服务配置（已废弃，保留以兼容旧配置） */
   qwen: {
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     defaultTemperature: 0.7,
-    defaultMaxTokens: 2000,
+    // defaultMaxTokens 已移除，不再设置默认限制，让模型根据上下文自动决定
+    articleMaxTokens: 6000, // 文章生成专用，支持1500-2500字的完整文章
   },
   
   /** 豆包图片生成服务配置 */

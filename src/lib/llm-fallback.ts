@@ -17,7 +17,7 @@ export interface LLMMessage {
 export interface TextLLMService {
   invoke(
     messages: LLMMessage[],
-    options?: { model?: string; temperature?: number }
+    options?: { model?: string; temperature?: number; max_tokens?: number }
   ): Promise<{ content: string }>;
 }
 
@@ -58,7 +58,7 @@ class DeepSeekService implements TextLLMService {
 
   async invoke(
     messages: LLMMessage[],
-    options?: { model?: string; temperature?: number }
+    options?: { model?: string; temperature?: number; max_tokens?: number }
   ): Promise<{ content: string }> {
     if (!this.apiKey) {
       throw new Error('DeepSeek API Key未配置，请设置 DEEPSEEK_API_KEY 环境变量');
@@ -72,12 +72,18 @@ class DeepSeekService implements TextLLMService {
       }));
 
       // 使用OpenAI兼容的chat.completions.create方法
-      const completion = await this.client.chat.completions.create({
+      const requestOptions: any = {
         model: options?.model || getTextModel('deepseek'),
         messages: openaiMessages,
         temperature: options?.temperature || serviceConfig.deepseek.defaultTemperature,
-        max_tokens: serviceConfig.deepseek.defaultMaxTokens,
-      });
+      };
+
+      // 只有在明确指定 max_tokens 时才设置，否则让模型自动决定
+      if (options?.max_tokens !== undefined) {
+        requestOptions.max_tokens = options.max_tokens;
+      }
+
+      const completion = await this.client.chat.completions.create(requestOptions);
 
       // 解析响应 - OpenAI兼容格式
       const content = completion.choices[0]?.message?.content;
@@ -116,7 +122,7 @@ class QwenService implements TextLLMService {
 
   async invoke(
     messages: LLMMessage[],
-    options?: { model?: string; temperature?: number }
+    options?: { model?: string; temperature?: number; max_tokens?: number }
   ): Promise<{ content: string }> {
     if (!this.apiKey) {
       throw new Error('通义千问API Key未配置，请设置 DASHSCOPE_API_KEY 或 QWEN_API_KEY 环境变量');
@@ -130,12 +136,18 @@ class QwenService implements TextLLMService {
       }));
 
       // 使用OpenAI兼容的chat.completions.create方法
-      const completion = await this.client.chat.completions.create({
+      const requestOptions: any = {
         model: options?.model || getTextModel('qwen'),
         messages: openaiMessages,
         temperature: options?.temperature || serviceConfig.qwen.defaultTemperature,
-        max_tokens: serviceConfig.qwen.defaultMaxTokens,
-      });
+      };
+
+      // 只有在明确指定 max_tokens 时才设置，否则让模型自动决定
+      if (options?.max_tokens !== undefined) {
+        requestOptions.max_tokens = options.max_tokens;
+      }
+
+      const completion = await this.client.chat.completions.create(requestOptions);
 
       // 解析响应 - OpenAI兼容格式
       const content = completion.choices[0]?.message?.content;
